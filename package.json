@@ -1,0 +1,30 @@
+{
+  "name": "enterprise-knowledge-hub-prototype",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "dev:all": "bash scripts/dev.sh",
+    "build": "tsc -b && vite build",
+    "preview": "vite preview --host 127.0.0.1",
+    "test:e2e": "PLAYWRIGHT_BROWSERS_PATH=.cache/ms-playwright playwright test"
+  },
+  "dependencies": {
+    "@ant-design/icons": "6.1.0",
+    "antd": "6.6.8",
+    "react": "19.3.1",
+    "react-dom": "19.3.1",
+    "react-router-dom": "7.18.4",
+    "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.64.1",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "@vitejs/plugin-react": "6.1.2",
+    "typescript": "7.0.2",
+    "vite": "8.3.5"
+  }
+}
+
