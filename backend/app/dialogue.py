@@ -12,6 +12,7 @@ from langchain_core.prompts import ChatPromptTemplate
 from . import clients
 from .errors import AppError, redact
 from .db import transaction
+from .metadata import label_line
 from .retrieval import Hit, keyword_ranking, search
 from .store import (
     chunk_rows_for,
@@ -63,12 +64,32 @@ def previous_exchange(messages: list[dict]) -> tuple[str, str]:
     return previous_user[:2000], str(messages[assistant_index]["content"])[:1500]
 
 
+def grounded_context(hits: list[Hit]) -> str:
+    """引用的是正文片段。标签只附在片段后面，用于溯源，不单独占一条检索结果。"""
+    seen_bodies: list[str] = []
+    parts: list[str] = []
+    body_index = 0
+    for hit in hits:
+        body = hit.context or hit.content
+        if body in seen_bodies:
+            continue
+        seen_bodies.append(body)
+        body_index += 1
+        label = label_line(hit.document_metadata)
+        header = f"[{body_index}] {hit.document_name} | {hit.location}"
+        if label:
+            header += f"\n标签：{label}"
+        parts.append(f"{header}\n{body}")
+    return "\n\n".join(parts)
+
+
 def hit_out(hit: Hit) -> dict:
     return {
         "documentName": hit.document_name,
         "knowledgeBaseName": hit.knowledge_base_name,
         "location": hit.location,
         "content": hit.content,
+        "metadata": hit.document_metadata,
         "semanticScore": None if hit.semantic_score is None else round(hit.semantic_score, 4),
         "rerankScore": None if hit.rerank_score is None else round(hit.rerank_score, 4),
     }
@@ -177,15 +198,7 @@ def iter_chat(conversation_id: str, question: str, knowledge_base_ids: list[str]
                 produced.append(character)
                 yield {"type": "token", "text": character}
         else:
-            seen_context: list[str] = []
-            parts: list[str] = []
-            for hit in hits:
-                body = hit.context or hit.content
-                if body in seen_context:
-                    continue
-                seen_context.append(body)
-                parts.append(f"[{len(parts) + 1}] {hit.document_name} | {hit.location}\n{body}")
-            context = "\n\n".join(parts)
+            context = grounded_context(hits)
             messages = ANSWER_PROMPT.format_messages(
                 previous_user=previous_user or "无",
                 previous_assistant=previous_assistant or "无",

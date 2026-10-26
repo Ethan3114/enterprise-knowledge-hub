@@ -22,6 +22,7 @@ import {
 } from 'antd';
 import { Link } from 'react-router-dom';
 import { ApiError, api, apiStream } from '../api';
+import ChunkTags from '../components/ChunkTags';
 import PageFrame from '../components/PageFrame';
 import type { ChatMessage, Conversation, RetrievalHit } from '../domain';
 import { useAppState } from '../state/AppState';
@@ -318,6 +319,7 @@ export default function ChatPage() {
                 <article key={`${citation.documentName}-${citation.location}-${index}`} className="citation-item">
                   <Typography.Text strong>{citation.documentName}</Typography.Text>
                   <Typography.Text type="secondary">{citation.location}</Typography.Text>
+                  <ChunkTags metadata={citation.metadata} />
                   <Typography.Paragraph className="hit-content">{citation.content}</Typography.Paragraph>
                 </article>
               ))}

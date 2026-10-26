@@ -51,6 +51,41 @@ textarea:focus-visible {
   font-size: 12px;
 }
 
+.metadata-link {
+  height: auto;
+  padding: 0;
+  font-size: 12px;
+}
+
+.chunk-toolbar {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+}
+
+.chunk-filter {
+  width: min(360px, 100%);
+}
+
+.column-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  width: 220px;
+}
+
+.column-picker-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.chunk-body {
+  margin-bottom: 0 !important;
+}
+
 .center-text {
   text-align: center;
 }

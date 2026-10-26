@@ -4,6 +4,7 @@
 混合模式把两边的名次做倒数排名融合，再按知识库设置决定要不要重排。
 """
 
+import json
 from dataclasses import dataclass
 
 import numpy as np
@@ -24,6 +25,27 @@ class Hit:
     token_count: int
     semantic_score: float | None
     rerank_score: float | None
+    document_metadata: dict | None = None
+
+
+def _document_metadata(row: dict) -> dict | None:
+    for key in ("chunk_tags", "document_metadata"):
+        parsed = _parse_metadata(row.get(key))
+        if parsed:
+            return parsed
+    return None
+
+
+def _parse_metadata(raw: object) -> dict | None:
+    if isinstance(raw, dict):
+        return raw
+    if not isinstance(raw, str) or not raw.strip():
+        return None
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError:
+        return None
+    return payload if isinstance(payload, dict) else None
 
 
 def _semantic_ranking(rows: list[dict], query_vector: list[float], threshold: float | None) -> list[tuple[str, float]]:
@@ -58,6 +80,7 @@ def keyword_ranking(connection, knowledge_base_ids: list[str], query: str) -> li
             FROM chunks_fts
             JOIN chunks ON chunks.id = chunks_fts.chunk_id
             WHERE chunks.knowledge_base_id IN ({placeholders})
+              AND chunks.location != '文档元数据'
               AND chunks_fts MATCH ?
             ORDER BY rank
             LIMIT ?
@@ -141,6 +164,7 @@ def search(
                 token_count=token_count,
                 semantic_score=semantic_scores.get(chunk_id),
                 rerank_score=rerank_scores.get(chunk_id),
+                document_metadata=_document_metadata(row),
             )
         )
         used_tokens += token_count

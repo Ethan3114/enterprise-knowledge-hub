@@ -11,12 +11,14 @@ from .chunking import chunk_blocks
 from .config import files_dir
 from .errors import AppError, redact
 from .limits import MAX_BATCH, MAX_DOCUMENTS, LimitError, check_upload, extension_of
+from .metadata import extract_metadata
 from .parsing import ParseError, parse_file
 from .store import (
     absolute_file,
     get_document,
     get_knowledge_base,
     get_knowledge_base_row,
+    get_llm_bundle,
     get_model_bundle,
     get_vision,
     insert_document,
@@ -159,6 +161,11 @@ def _process_document(document_id: str) -> None:
         )
         if not chunks:
             raise ParseError("没有提取到可索引的文字")
+        llm_bundle = get_llm_bundle()
+        if llm_bundle is None:
+            raise AppError("请先配置一个对话模型，用于抽取文档元数据")
+        source = "\n\n".join(block.text for block in blocks).strip()
+        metadata = extract_metadata(llm_bundle[0], llm_bundle[1], document["name"], source)
         vectors = clients.embed_texts(provider, model, [chunk.content for chunk in chunks])
         stored = []
         for chunk, vector in zip(chunks, vectors, strict=True):
@@ -173,7 +180,7 @@ def _process_document(document_id: str) -> None:
                     "embedding_dim": dimension,
                 }
             )
-        replace_document_chunks(document_id, document["knowledge_base_id"], stored)
+        replace_document_chunks(document_id, document["knowledge_base_id"], stored, metadata)
     except (AppError, ParseError, LimitError, ValueError) as error:
         mark_document_failed(document_id, redact(str(error)))
     except Exception as error:

@@ -15,6 +15,17 @@ export type ModelCapability = z.infer<typeof modelCapabilitySchema>;
 export const providerKindSchema = z.enum(['aihubmix', 'tongyi', 'deepseek']);
 export type ProviderKind = z.infer<typeof providerKindSchema>;
 
+export const documentIndexSchema = z.object({
+  time: z.string(),
+  version: z.string(),
+  subject: z.string(),
+  owner: z.string(),
+  visibility: z.string(),
+  keywords: z.array(z.string()),
+  questions: z.array(z.string()),
+});
+export type DocumentIndex = z.infer<typeof documentIndexSchema>;
+
 export const documentSchema = z.object({
   id: z.string(),
   name: z.string(),
@@ -24,6 +35,7 @@ export const documentSchema = z.object({
   status: documentStatusSchema,
   error: z.string().nullable(),
   chunkCount: z.number(),
+  metadata: documentIndexSchema.nullable(),
 });
 export type DocumentMetadata = z.infer<typeof documentSchema>;
 
@@ -152,6 +164,7 @@ export interface RetrievalHit {
   knowledgeBaseName: string;
   location: string;
   content: string;
+  metadata?: DocumentIndex | null;
   semanticScore: number | null;
   rerankScore: number | null;
 }

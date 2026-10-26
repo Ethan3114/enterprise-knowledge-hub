@@ -15,10 +15,13 @@ import {
   Button,
   Card,
   Col,
+  Descriptions,
   Empty,
   Form,
   Input,
   InputNumber,
+  List,
+  Modal,
   Popconfirm,
   Row,
   Select,
@@ -35,10 +38,13 @@ import {
 import type { TableColumnsType, TabsProps, UploadProps } from 'antd';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { ApiError, api } from '../api';
+import ChunkColumnTable from '../components/ChunkColumnTable';
+import ChunkTags from '../components/ChunkTags';
 import PageFrame from '../components/PageFrame';
 import {
   documentStatusLabels,
   knowledgeBaseStatusLabels,
+  type DocumentIndex,
   type DocumentMetadata,
   type DocumentStatus,
   type KnowledgeBaseSettings,
@@ -76,6 +82,7 @@ interface KnowledgeChunkRow {
   location: string;
   content: string;
   tokenCount: number;
+  tags: DocumentIndex | null;
 }
 
 function formatFileSize(size: number) {
@@ -88,12 +95,50 @@ function formatFileSize(size: number) {
   return `${(size / 1024 / 1024).toFixed(1)} MB`;
 }
 
+function MetadataView({ metadata }: { metadata: DocumentIndex }) {
+  return (
+    <Space orientation="vertical" size={16} style={{ width: '100%' }}>
+      <Descriptions column={1} size="small">
+        <Descriptions.Item label="时间">{metadata.time || '未注明'}</Descriptions.Item>
+        <Descriptions.Item label="版本">{metadata.version || '未注明'}</Descriptions.Item>
+        <Descriptions.Item label="主体">{metadata.subject || '未注明'}</Descriptions.Item>
+        <Descriptions.Item label="负责人">{metadata.owner || '未注明'}</Descriptions.Item>
+        <Descriptions.Item label="可见范围">{metadata.visibility || '全员'}</Descriptions.Item>
+      </Descriptions>
+      <div>
+        <Typography.Text strong>检索关键词</Typography.Text>
+        <div style={{ marginTop: 8 }}>
+          {metadata.keywords.length
+            ? metadata.keywords.map((keyword) => <Tag key={keyword}>{keyword}</Tag>)
+            : <Typography.Text type="secondary">未抽出关键词</Typography.Text>}
+        </div>
+      </div>
+      <div>
+        <Typography.Text strong>可能被问到的问题</Typography.Text>
+        {metadata.questions.length ? (
+          <List
+            size="small"
+            dataSource={metadata.questions}
+            renderItem={(question) => <List.Item>{question}</List.Item>}
+          />
+        ) : (
+          <Typography.Paragraph type="secondary">未抽出问题</Typography.Paragraph>
+        )}
+      </div>
+      <Typography.Text type="secondary" className="small-text">
+        这些是贴在每个知识片段上的标签。关键词和问题只帮助关键词检索命中正文，不会单独变成一条片段。版本和可见范围用于后续的版本管理与员工权限。
+      </Typography.Text>
+    </Space>
+  );
+}
+
 function DocumentsPanel({ knowledgeBaseId }: { knowledgeBaseId: string }) {
   const { data, uploadDocuments, removeDocument, buildKnowledgeBase, refresh } = useAppState();
   const { message: messageApi } = App.useApp();
   const knowledgeBase = data.knowledgeBases.find((item) => item.id === knowledgeBaseId)!;
   const pendingFiles = useRef<File[]>([]);
   const flushTimer = useRef<number>(0);
+  const [metadataDocument, setMetadataDocument] = useState<DocumentMetadata | null>(null);
   const isBuilding = knowledgeBase.documents.some((document) => document.status === 'building')
     || knowledgeBase.status === 'building';
   const rebuild = knowledgeBase.documents.length > 0
@@ -143,6 +188,13 @@ function DocumentsPanel({ knowledgeBaseId }: { knowledgeBaseId: string }) {
             <Typography.Text type="secondary" className="small-text">
               {record.mimeType || '未提供 MIME 类型'}
             </Typography.Text>
+            {record.metadata ? (
+              <div>
+                <Button type="link" size="small" className="metadata-link" onClick={() => setMetadataDocument(record)}>
+                  {[record.metadata.subject, record.metadata.owner].filter(Boolean).join(' · ') || '查看元数据'}
+                </Button>
+              </div>
+            ) : null}
           </div>
         </Space>
       ),
@@ -223,7 +275,7 @@ function DocumentsPanel({ knowledgeBaseId }: { knowledgeBaseId: string }) {
         showIcon
         type="info"
         title="文件会保存到本机，管理员手动构建后才能检索"
-        description="旧版 .doc 和 .xls 请先另存为 .docx、.xlsx 或 .csv。超过大小或页数限制的文件不会开始构建。"
+        description="构建时会把时间、版本、主体、负责人、可见范围、关键词和可能的问题记成每个片段的标签。需要先配置一个对话模型。旧版 .doc 和 .xls 请先另存为 .docx、.xlsx 或 .csv。"
       />
       <Button
         type="primary"
@@ -251,6 +303,16 @@ function DocumentsPanel({ knowledgeBaseId }: { knowledgeBaseId: string }) {
           locale={{ emptyText: <Empty description="尚未选择文件" image={Empty.PRESENTED_IMAGE_SIMPLE} /> }}
         />
       </Card>
+      <Modal
+        title={metadataDocument ? `${metadataDocument.name} 的元数据` : '元数据'}
+        width={640}
+        open={metadataDocument !== null}
+        onCancel={() => setMetadataDocument(null)}
+        footer={null}
+        destroyOnHidden
+      >
+        {metadataDocument?.metadata ? <MetadataView metadata={metadataDocument.metadata} /> : null}
+      </Modal>
     </Space>
   );
 }
@@ -280,37 +342,16 @@ function ChunksPanel({ knowledgeBaseId }: { knowledgeBaseId: string }) {
     };
   }, [knowledgeBaseId]);
 
-  const columns: TableColumnsType<KnowledgeChunkRow> = [
-    { title: '来源文件', dataIndex: 'documentName', width: 180 },
-    { title: '页码或位置', dataIndex: 'location', width: 140 },
-    { title: '正文', dataIndex: 'content', minWidth: 360 },
-    { title: 'Token', dataIndex: 'tokenCount', width: 90 },
-  ];
-
   return (
     <Space orientation="vertical" size={16} className="full-width">
       <Alert
         showIcon
         type="info"
-        title="知识片段保留来源文件和位置"
-        description="这里展示已经构建完成的正文。修改分块设置后，需要重新构建才会更新。"
+        title="每个标签单独一列"
+        description="时间、版本、主体、负责人、可见范围、关键词和可能的问题各占一列。不想看的列可以点掉，选择会留在这台电脑上。修改分块设置后，需要重新构建才会更新。"
       />
       <Card title={`知识片段（${total}）`} className="content-card">
-        <Table<KnowledgeChunkRow>
-          rowKey="id"
-          columns={columns}
-          dataSource={rows}
-          pagination={false}
-          scroll={{ x: 860 }}
-          locale={{
-            emptyText: (
-              <Empty
-                image={Empty.PRESENTED_IMAGE_SIMPLE}
-                description="文档完成构建后显示知识片段"
-              />
-            ),
-          }}
-        />
+        <ChunkColumnTable rows={rows} />
       </Card>
     </Space>
   );
@@ -407,6 +448,7 @@ function RetrievalPanel({
                     {hit.semanticScore !== null ? <Tag>语义 {hit.semanticScore}</Tag> : null}
                     {hit.rerankScore !== null ? <Tag color="purple">重排 {hit.rerankScore}</Tag> : null}
                   </Space>
+                  <ChunkTags metadata={hit.metadata} />
                   <Typography.Paragraph className="hit-content">{hit.content}</Typography.Paragraph>
                 </div>
               ))}

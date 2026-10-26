@@ -9,6 +9,7 @@ import numpy as np
 
 from .config import files_dir
 from .db import init_db, transaction
+from .metadata import normalize_metadata, tag_text
 from .textutil import search_tokens
 
 def now() -> str:
@@ -58,7 +59,23 @@ def document_out(row) -> dict:
         "status": row["status"],
         "error": row["error"],
         "chunkCount": row["chunk_count"],
+        "metadata": _metadata_out(row),
     }
+
+
+def _metadata_out(row) -> dict | None:
+    raw = row["metadata"] if "metadata" in row.keys() else ""
+    return _metadata_value(raw)
+
+
+def _metadata_value(raw: str) -> dict | None:
+    if not raw:
+        return None
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError:
+        return None
+    return normalize_metadata(payload) if isinstance(payload, dict) else None
 
 
 def settings_out(row) -> dict:
@@ -467,21 +484,44 @@ def mark_document_failed(document_id: str, message: str) -> None:
             recompute_status(connection, row["knowledge_base_id"])
 
 
-def replace_document_chunks(document_id: str, knowledge_base_id: str, chunks: list[dict]) -> None:
+def get_llm_bundle():
+    with transaction() as connection:
+        row = connection.execute(
+            """
+            SELECT models.id
+            FROM models JOIN providers ON providers.id = models.provider_id
+            WHERE models.capability = 'llm' AND providers.api_key != ''
+            ORDER BY models.created_at
+            LIMIT 1
+            """
+        ).fetchone()
+    if row is None:
+        return None
+    return get_model_bundle(row["id"])
+
+
+def replace_document_chunks(
+    document_id: str,
+    knowledge_base_id: str,
+    chunks: list[dict],
+    metadata: dict | None = None,
+) -> None:
     with transaction() as connection:
         old_ids = [
             row["id"] for row in connection.execute("SELECT id FROM chunks WHERE document_id = ?", (document_id,))
         ]
         _delete_fts(connection, old_ids)
         connection.execute("DELETE FROM chunks WHERE document_id = ?", (document_id,))
+        labels = normalize_metadata(metadata) if metadata else None
+        labels_json = json.dumps(labels, ensure_ascii=False) if labels else ""
         for position, chunk in enumerate(chunks):
             chunk_id = new_id()
             connection.execute(
                 """
                 INSERT INTO chunks(
                   id, knowledge_base_id, document_id, position, location, content, context_text,
-                  token_count, embedding, embedding_dim
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                  token_count, embedding, embedding_dim, tags
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     chunk_id,
@@ -494,15 +534,20 @@ def replace_document_chunks(document_id: str, knowledge_base_id: str, chunks: li
                     chunk["token_count"],
                     chunk["embedding"],
                     chunk["embedding_dim"],
+                    labels_json,
                 ),
             )
+            indexed = chunk["content"]
+            extra = tag_text(labels)
+            if extra:
+                indexed = f"{indexed}\n{extra}"
             connection.execute(
                 "INSERT INTO chunks_fts(chunk_id, tokens) VALUES (?, ?)",
-                (chunk_id, " ".join(search_tokens(chunk["content"]))),
+                (chunk_id, " ".join(search_tokens(indexed))),
             )
         connection.execute(
-            "UPDATE documents SET status = 'ready', error = NULL, chunk_count = ?, updated_at = ? WHERE id = ?",
-            (len(chunks), now(), document_id),
+            "UPDATE documents SET status = 'ready', error = NULL, chunk_count = ?, metadata = ?, updated_at = ? WHERE id = ?",
+            (len(chunks), labels_json, now(), document_id),
         )
         recompute_status(connection, knowledge_base_id)
 
@@ -515,14 +560,14 @@ def get_document(document_id: str):
 def list_chunks(knowledge_base_id: str, limit: int = 300) -> dict:
     with transaction() as connection:
         total = connection.execute(
-            "SELECT COUNT(*) AS total FROM chunks WHERE knowledge_base_id = ?",
+            "SELECT COUNT(*) AS total FROM chunks WHERE knowledge_base_id = ? AND location != '文档元数据'",
             (knowledge_base_id,),
         ).fetchone()["total"]
         rows = connection.execute(
             """
-            SELECT chunks.*, documents.name AS document_name
+            SELECT chunks.*, documents.name AS document_name, documents.metadata AS document_metadata
             FROM chunks JOIN documents ON documents.id = chunks.document_id
-            WHERE chunks.knowledge_base_id = ?
+            WHERE chunks.knowledge_base_id = ? AND chunks.location != '文档元数据'
             ORDER BY documents.selected_at, chunks.position
             LIMIT ?
             """,
@@ -539,6 +584,8 @@ def list_chunks(knowledge_base_id: str, limit: int = 300) -> dict:
                 "content": row["content"],
                 "context": row["context_text"] if "context_text" in row.keys() else "",
                 "tokenCount": row["token_count"],
+                "tags": _metadata_value(row["tags"] if "tags" in row.keys() else "")
+                or _metadata_value(row["document_metadata"] if "document_metadata" in row.keys() else ""),
             }
             for row in rows
         ],
@@ -554,11 +601,15 @@ def chunk_rows_for(knowledge_base_ids: list[str]) -> list[dict]:
             f"""
             SELECT chunks.id, chunks.knowledge_base_id, chunks.location, chunks.content,
                    chunks.context_text, chunks.token_count, chunks.embedding, chunks.embedding_dim,
+                   chunks.tags AS chunk_tags,
+                   documents.metadata AS document_metadata,
                    documents.name AS document_name, knowledge_bases.name AS knowledge_base_name
             FROM chunks
             JOIN documents ON documents.id = chunks.document_id
             JOIN knowledge_bases ON knowledge_bases.id = chunks.knowledge_base_id
-            WHERE chunks.knowledge_base_id IN ({placeholders}) AND chunks.embedding IS NOT NULL
+            WHERE chunks.knowledge_base_id IN ({placeholders})
+              AND chunks.embedding IS NOT NULL
+              AND chunks.location != '文档元数据'
             """,
             knowledge_base_ids,
         ).fetchall()
@@ -878,6 +929,11 @@ def _migrate(connection) -> None:
     chunk_columns = {row["name"] for row in connection.execute("PRAGMA table_info(chunks)")}
     if "context_text" not in chunk_columns:
         connection.execute("ALTER TABLE chunks ADD COLUMN context_text TEXT NOT NULL DEFAULT ''")
+    document_columns = {row["name"] for row in connection.execute("PRAGMA table_info(documents)")}
+    if "metadata" not in document_columns:
+        connection.execute("ALTER TABLE documents ADD COLUMN metadata TEXT NOT NULL DEFAULT ''")
+    if "tags" not in chunk_columns:
+        connection.execute("ALTER TABLE chunks ADD COLUMN tags TEXT NOT NULL DEFAULT ''")
     _remove_openrouter(connection)
 
 

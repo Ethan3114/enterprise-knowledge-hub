@@ -10,7 +10,14 @@ from collections.abc import Iterator
 from langchain_core.prompts import ChatPromptTemplate
 
 from . import clients
-from .dialogue import NO_HIT_ANSWER, _bundle, _knowledge_base_names, hit_out, retrieve_knowledge_bases
+from .dialogue import (
+    NO_HIT_ANSWER,
+    _bundle,
+    _knowledge_base_names,
+    grounded_context,
+    hit_out,
+    retrieve_knowledge_bases,
+)
 from .errors import AppError, redact
 from .store import insert_log
 
@@ -89,19 +96,11 @@ def iter_app_run(app_id: str, knowledge_base_ids: list[str], model_config_id: st
                 produced.append(character)
                 yield {"type": "token", "text": character}
         else:
-            seen: list[str] = []
-            parts: list[str] = []
-            for hit in hits:
-                body = hit.context or hit.content
-                if body in seen:
-                    continue
-                seen.append(body)
-                parts.append(f"[{len(parts) + 1}] {hit.document_name} | {hit.location}\n{body}")
             messages = SCENARIO_PROMPT.format_messages(
                 app_name=app["name"],
                 instruction=app["instruction"],
                 request=request_text,
-                context="\n\n".join(parts),
+                context=grounded_context(hits),
             )
             pieces: list[str] = []
             for text in clients.stream_answer(provider, model, messages, usage):
